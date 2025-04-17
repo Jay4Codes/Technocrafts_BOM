@@ -94,101 +94,77 @@ def extract_ac_dc(description):
     return "AC"
 
 
+def find_similar_item(row, master_catalog, preprocessed_catalog):
+    if not isinstance(row["DESCRIPTION"], str) or pd.isna(row["DESCRIPTION"]):
+        return None
+
+    description = row["DESCRIPTION"]
+    family = row["FAMILY"]
+    category = row["CATEGORY"]
+    ac_dc = row["AC/DC"]
+    make = row["MAKE"] if "MAKE" in row and isinstance(row["MAKE"], str) else ""
+
+    filtered_catalog = master_catalog
+    if family and family != "OTHER":
+        filtered_catalog = filtered_catalog[
+            filtered_catalog["Family"].str.upper() == family.upper()
+        ]
+
+    if len(filtered_catalog) == 0:
+        filtered_catalog = master_catalog
+
+    if category and category != "OTHER":
+        filtered_catalog = filtered_catalog[
+            filtered_catalog["Category"].str.upper() == category.upper()
+        ]
+
+    if len(filtered_catalog) == 0:
+        filtered_catalog = master_catalog
+
+    if make and make.strip():
+        make_filtered = filtered_catalog[
+            filtered_catalog["Make"].str.upper() == make.upper()
+        ]
+        if len(make_filtered) > 0:
+            filtered_catalog = make_filtered
+
+    if len(filtered_catalog) == 0:
+        return None
+
+    vectorizer = TfidfVectorizer(stop_words="english")
+
+    filtered_indices = filtered_catalog.index.tolist()
+
+    filtered_descriptions = [preprocessed_catalog[i] for i in filtered_indices]
+
+    try:
+        tfidf_matrix = vectorizer.fit_transform(filtered_descriptions + [description])
+
+        cosine_similarities = cosine_similarity(tfidf_matrix[-1:], tfidf_matrix[:-1])[0]
+
+        if len(cosine_similarities) > 0 and max(cosine_similarities) > 0.3:
+            most_similar_idx = filtered_indices[np.argmax(cosine_similarities)]
+            return master_catalog.loc[most_similar_idx]
+    except:
+        pass
+
+    return None
+
+
 def preprocess_description(description):
     if not isinstance(description, str):
         return ""
 
     text = description.upper()
+
     text = re.sub(r"[^\w\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
 
 
-def calculate_description_similarity(bom_description, catalog_description):
-    if not isinstance(bom_description, str) or not isinstance(catalog_description, str):
-        return 0.0
-
-    vectorizer = TfidfVectorizer(stop_words="english")
-
-    try:
-        tfidf_matrix = vectorizer.fit_transform([bom_description, catalog_description])
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        return similarity
-    except:
-        return 0.0
-
-
-def verify_item_code_and_get_confidence(row, master_catalog):
-    item_code = row["ITEM_CODE"]
-    description = row["DESCRIPTION"] if isinstance(row["DESCRIPTION"], str) else ""
-    make = row["MAKE"] if "MAKE" in row and isinstance(row["MAKE"], str) else ""
-    family = row["FAMILY"]
-    category = row["CATEGORY"]
-
-    # Check if item code exists in master catalog
-    matching_items = master_catalog[master_catalog["Item Code"] == item_code]
-
-    if len(matching_items) == 0:
-        return {
-            "Match Found": False,
-            "Item Code": item_code,
-            "Match Description": "",
-            "Confidence": "Not Found",
-            "Similarity Score": 0.0,
-        }
-
-    # Item code found in master catalog
-    matched_item = matching_items.iloc[0]
-
-    # Calculate similarity between descriptions
-    bom_desc_processed = preprocess_description(description)
-    catalog_desc_processed = preprocess_description(matched_item["Item Description"])
-    similarity_score = calculate_description_similarity(
-        bom_desc_processed, catalog_desc_processed
-    )
-
-    # Make matching (if available)
-    make_match = False
-    if make and isinstance(matched_item["Make"], str):
-        make_match = make.upper() == matched_item["Make"].upper()
-
-    # Family matching (if available)
-    family_match = False
-    if isinstance(matched_item["Family"], str):
-        family_match = family.upper() == matched_item["Family"].upper()
-
-    # Category matching (if available)
-    category_match = False
-    if isinstance(matched_item["Category"], str):
-        category_match = category.upper() == matched_item["Category"].upper()
-
-    # Determine confidence level
-    confidence = "Low"
-    if similarity_score > 0.7:
-        confidence = "High"
-    elif similarity_score > 0.4:
-        confidence = "Medium"
-    else:
-        confidence = "Low"
-
-    # Boost confidence if make or family matches
-    if make_match and (confidence == "Medium" or similarity_score > 0.3):
-        confidence = "High"
-    if family_match and confidence == "Low" and similarity_score > 0.2:
-        confidence = "Medium"
-
-    return {
-        "Match Found": True,
-        "Item Code": item_code,
-        "Match Description": matched_item["Item Description"],
-        "Confidence": confidence,
-        "Similarity Score": similarity_score,
-    }
-
-
 def main():
-    st.title("Technocrafts BOM to ERP Format Converter")
+    st.title("Technoocrafts BOM to ERP Format Converter")
 
     with st.sidebar:
         st.header("Upload Files")
@@ -201,12 +177,11 @@ def main():
             st.subheader("BOM File Preview")
             st.dataframe(bom_data.head())
 
-            # st.subheader("Master Catalog Preview")
-            # st.dataframe(master_catalog.head())
+            st.subheader("Master Catalog Preview")
 
             st.subheader("Column Mapping")
 
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 description_col = st.selectbox(
@@ -251,18 +226,7 @@ def main():
                         else 0
                     ),
                 )
-
-            with col5:
-                item_code_col = st.selectbox(
-                    "Item Code Column",
-                    options=bom_data.columns,
-                    index=(
-                        bom_data.columns.get_loc("ITEM CODE")
-                        if "ITEM CODE" in bom_data.columns
-                        else 0
-                    ),
-                )
-
+    
             if st.button("Process BOM"):
                 bom_mapped = bom_data.copy()
                 bom_mapped.rename(
@@ -271,7 +235,6 @@ def main():
                         make_col: "MAKE",
                         qty_col: "QTY",
                         type_ref_col: "TYPE_REF",
-                        item_code_col: "ITEM_CODE",
                     },
                     inplace=True,
                 )
@@ -285,18 +248,48 @@ def main():
                     )
                     bom_mapped["AC/DC"] = bom_mapped["DESCRIPTION"].apply(extract_ac_dc)
 
-                with st.spinner("Verifying item codes with master catalog..."):
-                    verification_results = []
+                preprocessed_catalog = [
+                    preprocess_description(desc)
+                    for desc in master_catalog["Item Description"]
+                ]
+
+                with st.spinner("Matching items with master catalog..."):
+                    matched_items = []
                     for idx, row in bom_mapped.iterrows():
-                        result = verify_item_code_and_get_confidence(
-                            row, master_catalog
+                        matched_item = find_similar_item(
+                            row, master_catalog, preprocessed_catalog
                         )
-                        result["Index"] = idx
-                        verification_results.append(result)
+                        if matched_item is not None:
+                            matched_items.append(
+                                {
+                                    "Index": idx,
+                                    "Item Code": matched_item["Item Code"],
+                                    "Match": matched_item["Item Description"],
+                                    "Confidence": (
+                                        "High"
+                                        if matched_item["Family"].upper()
+                                        == row["FAMILY"].upper()
+                                        else "Medium"
+                                    ),
+                                }
+                            )
+                        else:
+                            matched_items.append(
+                                {
+                                    "Index": idx,
+                                    "Item Code": "NOT_FOUND",
+                                    "Match": "",
+                                    "Confidence": "Low",
+                                }
+                            )
 
-                verification_df = pd.DataFrame(verification_results)
+                matching_results = pd.DataFrame(matched_items)
 
-                # Create ERP data using the provided item codes
+                bom_mapped["ITEM_CODE"] = "NOT_FOUND"
+                for _, row in matching_results.iterrows():
+                    if row["Item Code"] != "NOT_FOUND":
+                        bom_mapped.at[row["Index"], "ITEM_CODE"] = row["Item Code"]
+
                 erp_data = pd.DataFrame(
                     {
                         "Item Code": bom_mapped["ITEM_CODE"],
@@ -319,37 +312,10 @@ def main():
                 feature_df = bom_mapped[["DESCRIPTION", "FAMILY", "CATEGORY", "AC/DC"]]
                 st.dataframe(feature_df)
 
-                st.write("Item Code Verification Results")
-                verification_display = verification_df[
-                    [
-                        "Item Code",
-                        "Match Found",
-                        "Match Description",
-                        "Confidence",
-                        "Similarity Score",
-                    ]
-                ]
-                st.dataframe(verification_display)
+                st.write("Matching Results with Master Catalog")
+                st.dataframe(matching_results)
 
-                # Count confidence levels
-                confidence_counts = (
-                    verification_df["Confidence"].value_counts().to_dict()
-                )
-                st.write("Confidence Summary:")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("High Confidence", confidence_counts.get("High", 0))
-                with col2:
-                    st.metric("Medium Confidence", confidence_counts.get("Medium", 0))
-                with col3:
-                    st.metric("Low Confidence", confidence_counts.get("Low", 0))
-                with col4:
-                    st.metric("Not Found", confidence_counts.get("Not Found", 0))
-
-                st.subheader("Updated BOM with Verification")
-                # Add verification results to BOM
-                bom_mapped["VERIFIED"] = verification_df["Match Found"]
-                bom_mapped["CONFIDENCE"] = verification_df["Confidence"]
+                st.subheader("Updated BOM with Item Codes")
                 st.dataframe(bom_mapped)
 
                 st.subheader("Final ERP Excel")
@@ -369,7 +335,7 @@ def main():
                     st.download_button(
                         label="Download Updated BOM",
                         data=updated_bom_excel,
-                        file_name="verified_bom.xlsx",
+                        file_name="updated_bom.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
 
@@ -384,7 +350,7 @@ def main():
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
     else:
-        st.info("Please upload the BOM Excel file to continue.")
+        st.info("Please upload both the BOM Excel file Excel file to continue.")
 
         st.subheader("Expected BOM File Format")
         sample_bom = pd.DataFrame(
@@ -398,7 +364,6 @@ def main():
                 "MAKE": ["Schneider", "ABB", "Siemens"],
                 "TOTAL QTY 2 SETS": [2, 4, 8],
                 "TYPE REFERENCE": ["Q1", "K1", "L1"],
-                "ITEM CODE": ["MC-100-36", "CON-95-AC", "IND-LED-GRN"],
             }
         )
         st.dataframe(sample_bom)
