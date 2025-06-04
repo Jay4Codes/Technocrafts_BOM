@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Technocrafts BOM to ERP Converter API",
     description="Convert BOM files to ERP format with intelligent item matching",
-    version="1.0.0",
     root_path="/apii",
 )
 
@@ -522,4 +521,4 @@ async def health_check():
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8001)
