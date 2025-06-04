@@ -3,3 +3,6 @@ streamlit
 scikit-learn
 numpy
 openpyxl
+fastapi[standard]
+uvicorn
+pydantic

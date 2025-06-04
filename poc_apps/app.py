@@ -9,7 +9,6 @@ import os
 
 st.set_page_config(page_title="Technocrafts BOM to ERP Converter", layout="wide")
 
-# Check if master catalog exists, otherwise create empty dataframe
 if os.path.exists("master_catalog.xlsx"):
     master_catalog = pd.read_excel("master_catalog.xlsx")
 else:
@@ -21,7 +20,6 @@ else:
         "Category": [],
         "AC/DC": [],
     })
-
 
 def extract_family(description):
     if not isinstance(description, str):
@@ -51,7 +49,6 @@ def extract_family(description):
                 return family
 
     return "OTHER"
-
 
 def extract_category(description):
     if not isinstance(description, str):
@@ -84,7 +81,6 @@ def extract_category(description):
 
     return "OTHER"
 
-
 def extract_ac_dc(description):
     if not isinstance(description, str):
         return "AC"
@@ -105,7 +101,6 @@ def extract_ac_dc(description):
 
     return "AC"
 
-
 def preprocess_description(description):
     if not isinstance(description, str):
         return ""
@@ -115,7 +110,6 @@ def preprocess_description(description):
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
-
 
 def find_similar_items(row, master_catalog):
     """Find the top 5 similar items in the master catalog based on description and make"""
@@ -130,7 +124,6 @@ def find_similar_items(row, master_catalog):
 
     filtered_catalog = master_catalog.copy()
     
-    # Filter by make if available
     if make and make.strip():
         make_filtered = filtered_catalog[
             filtered_catalog["Make"].str.upper() == make.upper()
@@ -140,7 +133,7 @@ def find_similar_items(row, master_catalog):
         if len(make_filtered) > 0:
             filtered_catalog = make_filtered
 
-    # Further filter by family if we still have a decent number of items
+    
     if family and family != "OTHER" and len(filtered_catalog) > 5:
         family_filtered = filtered_catalog[
             filtered_catalog["Family"].str.upper() == family.upper()
@@ -150,7 +143,7 @@ def find_similar_items(row, master_catalog):
         if len(family_filtered) > 0:
             filtered_catalog = family_filtered
 
-    # Further filter by category if we still have a decent number of items
+    
     if category and category != "OTHER" and len(filtered_catalog) > 5:
         category_filtered = filtered_catalog[
             filtered_catalog["Category"].str.upper() == category.upper()
@@ -160,32 +153,30 @@ def find_similar_items(row, master_catalog):
         if len(category_filtered) > 0:
             filtered_catalog = category_filtered
 
-    # If we have no matches so far, revert to complete catalog
+    
     if len(filtered_catalog) == 0:
         filtered_catalog = master_catalog
 
-    # Prepare TF-IDF vectorizer for similarity calculation
     vectorizer = TfidfVectorizer(stop_words="english")
-    
     try:
-        # Process BOM description and catalog descriptions
+        
         bom_description = preprocess_description(description)
         catalog_descriptions = [preprocess_description(desc) for desc in filtered_catalog["Item Description"]]
         
-        # Add BOM description to the list for TF-IDF calculation
+        
         all_descriptions = catalog_descriptions + [bom_description]
         
-        # Compute TF-IDF matrix and cosine similarity
+        
         tfidf_matrix = vectorizer.fit_transform(all_descriptions)
         cosine_similarities = cosine_similarity(tfidf_matrix[-1:], tfidf_matrix[:-1])[0]
         
-        # Get indices of top 5 similar items
+        
         top_indices = np.argsort(cosine_similarities)[::-1][:5]
         
-        # Filter for items with reasonable similarity
+        
         similar_items = []
         for idx in top_indices:
-            if cosine_similarities[idx] > 0.2:  # Minimum similarity threshold
+            if cosine_similarities[idx] > 0.2:  
                 item = filtered_catalog.iloc[idx]
                 similar_items.append({
                     "Item Code": item["Item Code"],
@@ -207,7 +198,6 @@ def verify_item_code(item_code, master_catalog):
     
     return item_code in master_catalog["Item Code"].values
 
-
 def calculate_confidence(similarity_score, make_match=False, family_match=False):
     """Calculate confidence level based on similarity score and other matches"""
     if similarity_score > 0.7 or (similarity_score > 0.5 and make_match):
@@ -217,12 +207,10 @@ def calculate_confidence(similarity_score, make_match=False, family_match=False)
     else:
         return "Low"
 
-
 def update_master_catalog(new_catalog):
     """Update master catalog with new items from uploaded catalog"""
     global master_catalog
     
-    # Ensure both catalogs have the same columns
     required_columns = ["Item Code", "Item Description", "Make", "Family", "Category", "AC/DC"]
     
     for col in required_columns:
@@ -231,36 +219,29 @@ def update_master_catalog(new_catalog):
         if col not in new_catalog.columns:
             new_catalog[col] = ""
     
-    # Find new items (not present in current catalog)
     current_item_codes = set(master_catalog["Item Code"].values)
     new_items = new_catalog[~new_catalog["Item Code"].isin(current_item_codes)]
     
     if len(new_items) > 0:
-        # Append new items to master catalog
         master_catalog = pd.concat([master_catalog, new_items[required_columns]], ignore_index=True)
-        
-        # Save updated master catalog
         master_catalog.to_excel("master_catalog.xlsx", index=False)
         
         return len(new_items)
     
     return 0
 
-
 def main():
     st.title("Technocrafts BOM to ERP Format Converter")
     
     st.sidebar.header("Upload Files")
     
-    # Upload BOM file
     uploaded_bom = st.sidebar.file_uploader("Upload BOM Excel File", type=["xlsx", "xls"])
     
-    # Upload master catalog file (optional)
     st.sidebar.markdown("---")
     st.sidebar.subheader("Optional: Update Master Catalog")
     uploaded_catalog = st.sidebar.file_uploader("Upload New Master Catalog", type=["xlsx", "xls"])
     
-    # Process uploaded master catalog if provided
+    
     if uploaded_catalog:
         try:
             new_catalog = pd.read_excel(uploaded_catalog)
@@ -272,7 +253,6 @@ def main():
         except Exception as e:
             st.sidebar.error(f"Error updating master catalog: {str(e)}")
     
-    # Display master catalog info
     st.sidebar.markdown("---")
     st.sidebar.info(f"Current master catalog contains {len(master_catalog)} items")
     
@@ -283,7 +263,7 @@ def main():
             st.subheader("BOM File Preview")
             st.dataframe(bom_data.head())
             
-            # Column mapping section
+            
             st.subheader("Column Mapping")
             
             col1, col2 = st.columns(2)
@@ -319,7 +299,7 @@ def main():
                     ),
                 )
                 
-                # Find any column with "QTY" in its name
+                
                 qty_cols = [col for col in bom_data.columns if "QTY" in col.upper()]
                 default_qty_idx = 0
                 if qty_cols:
@@ -331,7 +311,6 @@ def main():
                     index=default_qty_idx
                 )
             
-            # Check if ITEM CODE column exists
             item_code_exists = "ITEM CODE" in bom_data.columns
             for col in bom_data.columns:
                 if "ITEM" in col.upper() and "CODE" in col.upper():
@@ -354,7 +333,7 @@ def main():
                 item_code_col = None
             
             if st.button("Process BOM"):
-                # Map columns and create a working copy of the BOM
+                
                 bom_mapped = bom_data.copy()
                 bom_mapped.rename(
                     columns={
@@ -371,47 +350,44 @@ def main():
                 else:
                     bom_mapped["ITEM_CODE"] = "NOT_FOUND"
                 
-                # Extract features
                 with st.spinner("Extracting features from descriptions..."):
                     bom_mapped["FAMILY"] = bom_mapped["DESCRIPTION"].apply(extract_family)
                     bom_mapped["CATEGORY"] = bom_mapped["DESCRIPTION"].apply(extract_category)
                     bom_mapped["AC/DC"] = bom_mapped["DESCRIPTION"].apply(extract_ac_dc)
-                
-                # Process each row to find similar items or verify existing item codes
+                 
                 with st.spinner("Processing BOM items..."):
-                    # Store item code options for each row
+                    
                     item_code_options = {}
                     
-                    # Create a progress bar
+                    
                     progress_bar = st.progress(0)
                     total_rows = len(bom_mapped)
                     
                     for idx, row in bom_mapped.iterrows():
-                        # Update progress
+                        
                         progress_bar.progress((idx + 1) / total_rows)
                         
-                        # Case 1: Item code exists and is valid
+                        
                         if "ITEM_CODE" in row and row["ITEM_CODE"] and row["ITEM_CODE"] != "NOT_FOUND":
-                            # Verify the item code
+                            
                             if verify_item_code(row["ITEM_CODE"], master_catalog):
-                                # Keep the existing item code
+                                
                                 item_code_options[idx] = [row["ITEM_CODE"]]
-                                # Set confidence to "Existing"
+                                
                                 bom_mapped.at[idx, "CONFIDENCE"] = "Existing"
                             else:
-                                # Item code not found in master catalog
+                                
                                 similar_items = find_similar_items(row, master_catalog)
                                 options = [item["Item Code"] for item in similar_items]
                                 options.append("NOT_FOUND")
                                 item_code_options[idx] = options
                                 
-                                # Set default to NOT_FOUND
+                                
                                 bom_mapped.at[idx, "ITEM_CODE"] = "NOT_FOUND"
                                 bom_mapped.at[idx, "CONFIDENCE"] = "Not Found"
                         
-                        # Case 2: No item code or "NOT_FOUND"
                         else:
-                            # Find similar items
+                            
                             similar_items = find_similar_items(row, master_catalog)
                             
                             if similar_items:
@@ -419,12 +395,12 @@ def main():
                                 options.append("NOT_FOUND")
                                 item_code_options[idx] = options
                                 
-                                # Set default to first (most similar) item code
+                                
                                 bom_mapped.at[idx, "ITEM_CODE"] = similar_items[0]["Item Code"]
                                 
-                                # Calculate confidence based on similarity
+                                
                                 make_match = similar_items[0].get("Make", "").upper() == row["MAKE"].upper() if isinstance(row["MAKE"], str) else False
-                                family_match = False  # You would need to fetch this from master catalog
+                                family_match = False  
                                 
                                 confidence = calculate_confidence(
                                     similar_items[0]["Similarity"], 
@@ -436,22 +412,17 @@ def main():
                                 item_code_options[idx] = ["NOT_FOUND"]
                                 bom_mapped.at[idx, "ITEM_CODE"] = "NOT_FOUND"
                                 bom_mapped.at[idx, "CONFIDENCE"] = "Not Found"
-                    
-                    # Clear progress bar when done
+                        
                     progress_bar.empty()
                 
-                # Display enhanced BOM with interactive dropdowns for item codes
                 st.subheader("Enhanced BOM with Item Code Selection")
                 
-                # Create a copy of the BOM for display with dropdowns
                 interactive_bom = st.empty()
                 interactive_bom.dataframe(bom_mapped)
                 
-                # Create interactive form for updating item codes
                 with st.form("item_code_form"):
                     st.write("Select Item Codes for BOM Items")
                     
-                    # Create dropdowns for each row that has multiple options
                     row_updates = {}
                     
                     for idx, options in item_code_options.items():
@@ -468,15 +439,15 @@ def main():
                     submit_button = st.form_submit_button("Update Item Codes")
                     
                     if submit_button:
-                        # Update the BOM with selected item codes
+                        
                         for idx, item_code in row_updates.items():
                             bom_mapped.at[idx, "ITEM_CODE"] = item_code
                             
-                            # Update confidence based on selection
+                            
                             if item_code == "NOT_FOUND":
                                 bom_mapped.at[idx, "CONFIDENCE"] = "Not Found"
                             else:
-                                # Find similarity score for this item
+                                
                                 similar_items = find_similar_items(bom_mapped.loc[idx], master_catalog)
                                 selected_item = next((item for item in similar_items if item["Item Code"] == item_code), None)
                                 
@@ -484,11 +455,9 @@ def main():
                                     make_match = selected_item.get("Make", "").upper() == bom_mapped.loc[idx, "MAKE"].upper() if isinstance(bom_mapped.loc[idx, "MAKE"], str) else False
                                     confidence = calculate_confidence(selected_item["Similarity"], make_match=make_match)
                                     bom_mapped.at[idx, "CONFIDENCE"] = confidence
-                        
-                        # Update the displayed BOM
+                             
                         interactive_bom.dataframe(bom_mapped)
                 
-                # Create ERP data from the updated BOM
                 erp_data = pd.DataFrame({
                     "Item Code": bom_mapped["ITEM_CODE"],
                     "Feeder Name": 1,
@@ -503,18 +472,15 @@ def main():
                     "Supply Type": "",
                 })
                 
-                # Create separate ERP data for valid items and not found items
                 valid_erp_data = erp_data[erp_data["Item Code"] != "NOT_FOUND"]
                 not_found_bom = bom_mapped[bom_mapped["ITEM_CODE"] == "NOT_FOUND"]
                 
-                # Display results
                 st.subheader("Final ERP Excel")
                 st.dataframe(valid_erp_data)
                 
                 st.subheader("Items Not Found in Master Catalog")
                 st.dataframe(not_found_bom)
                 
-                # Generate Excel files for download
                 updated_bom_excel = io.BytesIO()
                 bom_mapped.to_excel(updated_bom_excel, index=False)
                 updated_bom_excel.seek(0)
@@ -527,7 +493,7 @@ def main():
                 not_found_bom.to_excel(not_found_excel, index=False)
                 not_found_excel.seek(0)
                 
-                # Download buttons
+                
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
@@ -570,7 +536,7 @@ def main():
             "MAKE": ["Schneider", "ABB", "Siemens"],
             "TOTAL QTY 2 SETS": [2, 4, 8],
             "TYPE REFERENCE": ["Q1", "K1", "L1"],
-            "ITEM CODE": ["MC-100-36", "", "IND-LED-GRN"],  # Example with some missing item codes
+            "ITEM CODE": ["MC-100-36", "", "IND-LED-GRN"],  
         })
         st.dataframe(sample_bom)
         
