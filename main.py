@@ -398,8 +398,6 @@ async def export_erp(processing_result: Dict[str, Any]):
                     "ListPrice": "",
                     "Discount": "",
                     "Supply Type": "",
-                    "Confidence": result["confidence"],
-                    **base_data
                 }
                 erp_data.append(erp_record)
             else:
