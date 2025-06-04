@@ -23,7 +23,7 @@ app = FastAPI(
     title="Technocrafts BOM to ERP Converter API",
     description="Convert BOM files to ERP format with intelligent item matching",
     version="1.0.0",
-    root_path="/api",
+    root_path="/apii",
 )
 
 app.add_middleware(
