@@ -6,3 +6,6 @@ openpyxl
 fastapi[standard]
 uvicorn
 pydantic
+pymongo
+python-dotenv
+certifi

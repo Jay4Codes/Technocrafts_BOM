@@ -7,7 +7,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
 import io
-import os
 from typing import List, Dict, Any
 from pydantic import BaseModel
 import logging
@@ -15,6 +14,8 @@ from datetime import datetime
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import uvicorn
+from pymongo import MongoClient
+import certifi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:5174",
         "https://abhistat.com",
         "https://www.abhistat.com",
         "http://abhistat.com",
@@ -51,6 +53,7 @@ app.add_middleware(
         "Access-Control-Request-Headers"
     ],
 )
+
 class ItemMatch(BaseModel):
     item_code: str
     description: str
@@ -71,6 +74,14 @@ class ERPExportData(BaseModel):
     erp_data: List[Dict[str, Any]]
     not_found_data: List[Dict[str, Any]]
 
+class ItemCodeUpdate(BaseModel):
+    index: int
+    itemCode: str
+
+class UpdateItemCodesRequest(BaseModel):
+    updates: List[ItemCodeUpdate]
+    processed_bom: Dict[str, Any]
+
 class BOMProcessor:
     def __init__(self):
         self.master_catalog = self._load_master_catalog()
@@ -79,12 +90,47 @@ class BOMProcessor:
         
     def _load_master_catalog(self) -> pd.DataFrame:
         try:
-            if os.path.exists("master_catalog.xlsx"):
-                catalog = pd.read_excel("master_catalog.xlsx")
-                logger.info(f"Loaded master catalog with {len(catalog)} items")
-                return catalog
+            mongodb_uri = "mongodb+srv://atharav2601:Z3pFaAjfVFbnJD7K@technocrafts.z5vysrd.mongodb.net/erp?retryWrites=true&w=majority"
+            client = MongoClient(mongodb_uri, tlsCAFile=certifi.where())
+            db = client.erp
+            collection = db.mastercatalogs
+            
+            documents = list(collection.find({}))
+            
+            if documents:
+                df = pd.DataFrame(documents)
+                
+                column_mapping = {
+                    'itemDescription': 'Item Description',
+                    'family': 'Family',
+                    'category': 'Category',
+                    'itemCode': 'Item Code',
+                    'make': 'Make',
+                    'rating': 'Rating',
+                    'otd': 'OTD',
+                    'uom': 'UOM',
+                    'exciseCategory': 'Excise Category',
+                    'application': 'Application',
+                    'salesDescription': 'Sales Description'
+                }
+                
+                df = df.rename(columns=column_mapping)
+                
+                df['AC/DC'] = 'AC'
+                
+                required_columns = ['Item Code', 'Item Description', 'Make', 'Family', 'Category', 'AC/DC']
+                for col in required_columns:
+                    if col not in df.columns:
+                        df[col] = ''
+                
+                df = df[required_columns]
+                
+                df = df.fillna('')
+                
+                logger.info(f"Loaded master catalog from MongoDB with {len(df)} items")
+                return df
             else:
-                logger.warning("Master catalog not found, creating empty catalog")
+                logger.warning("No items found in MongoDB collection, creating empty catalog")
                 return pd.DataFrame({
                     "Item Code": [],
                     "Item Description": [],
@@ -94,8 +140,15 @@ class BOMProcessor:
                     "AC/DC": [],
                 })
         except Exception as e:
-            logger.error(f"Error loading master catalog: {e}")
-            return pd.DataFrame()
+            logger.error(f"Error loading master catalog from MongoDB: {e}")
+            return pd.DataFrame({
+                "Item Code": [],
+                "Item Description": [],
+                "Make": [],
+                "Family": [],
+                "Category": [],
+                "AC/DC": [],
+            })
 
     def extract_family(self, description: str) -> str:
         if not isinstance(description, str):
@@ -365,6 +418,67 @@ async def process_bom(file: UploadFile = File(...)):
         logger.error(f"Error processing BOM: {e}")
         print(f"[ERROR] Error processing BOM: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing BOM file: {str(e)}")
+
+@app.post("/update-item-codes")
+async def update_item_codes(request: UpdateItemCodesRequest):
+    try:
+        processed_bom = request.processed_bom
+        updates = request.updates
+        
+        items = processed_bom.get("items", [])
+        summary = processed_bom.get("summary", {})
+        
+        for update in updates:
+            if 0 <= update.index < len(items):
+                item = items[update.index]
+                old_item_code = item.get("matched_item_code", "")
+                new_item_code = update.itemCode
+                
+                if processor.verify_item_code(new_item_code):
+                    item["matched_item_code"] = new_item_code
+                    item["confidence"] = "High"
+                    item["status"] = "matched"
+                    
+                    catalog_item = processor.master_catalog[
+                        processor.master_catalog["Item Code"] == new_item_code
+                    ].iloc[0] if len(processor.master_catalog[
+                        processor.master_catalog["Item Code"] == new_item_code
+                    ]) > 0 else None
+                    
+                    if catalog_item is not None:
+                        item["similar_items"] = [{
+                            "item_code": new_item_code,
+                            "description": str(catalog_item.get("Item Description", "")),
+                            "make": str(catalog_item.get("Make", "")),
+                            "similarity_score": 1.0,
+                            "confidence": "High"
+                        }]
+                else:
+                    item["matched_item_code"] = new_item_code
+                    item["confidence"] = "Medium"
+                    item["status"] = "updated"
+        
+        updated_matched = sum(1 for item in items if item["status"] in ["matched", "existing_verified", "updated"])
+        updated_not_found = len(items) - updated_matched
+        updated_existing = sum(1 for item in items if item["status"] == "existing_verified")
+        
+        updated_summary = {
+            "total": len(items),
+            "matched": updated_matched - updated_existing,
+            "notFound": updated_not_found,
+            "existing": updated_existing
+        }
+        
+        return {
+            "success": True,
+            "message": f"Successfully updated {len(updates)} item codes",
+            "items": items,
+            "summary": updated_summary
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating item codes: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating item codes: {str(e)}")
 
 @app.post("/export-erp")
 async def export_erp(processing_result: Dict[str, Any]):
