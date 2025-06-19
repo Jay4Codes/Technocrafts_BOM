@@ -16,6 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 import uvicorn
 from pymongo import MongoClient
 import certifi
+from PDFDrawingProcessor import PDFDrawingProcessor
+import tempfile
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -633,5 +636,182 @@ async def health_check():
         "master_catalog_items": len(processor.master_catalog)
     }
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+class PDFProcessingResult(BaseModel):
+    success: bool
+    message: str
+    data: Dict[str, Any]
+    processing_time: float
+    
+def convert_ndarray_to_list(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_ndarray_to_list(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_ndarray_to_list(v) for v in obj]
+    else:
+        return obj
+
+@app.post("/process-pdf", response_model=PDFProcessingResult)
+async def process_pdf(file: UploadFile = File(...)):
+    start_time = datetime.now()
+    logger.info(f"Received PDF file: {file.filename}")
+    print(f"[INFO] Received PDF file: {file.filename}")
+
+    if not file.filename.lower().endswith('.pdf'):
+        logger.error("File must be a PDF file")
+        print("[ERROR] File must be a PDF file")
+        raise HTTPException(status_code=400, detail="File must be a PDF file")
+
+    temp_file_path = None
+    try:
+        contents = await file.read()
+        logger.info(f"Read {len(contents)} bytes from uploaded PDF")
+        print(f"[INFO] Read {len(contents)} bytes from uploaded PDF")
+        
+        if len(contents) == 0:
+            logger.error("Uploaded file is empty")
+            print("[ERROR] Uploaded file is empty")
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(contents)
+            temp_file_path = temp_file.name
+
+        processor_instance = PDFDrawingProcessor(temp_file_path)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='_indexed.pdf') as output_file:
+            output_path = output_file.name
+
+        result = processor_instance.index_pdf(output_path)
+        
+        if result[0] is None:
+            logger.error("PDF processing failed")
+            print("[ERROR] PDF processing failed")
+            raise HTTPException(status_code=500, detail="PDF processing failed")
+            
+        buffer, rev_details, title_details, sheet_details, dnum_details = result
+
+        df = processor_instance.get_dataframe()
+        
+        data = {
+            "table_data": df.to_dict(orient='records') if not df.empty else [],
+            "total_pages": len(processor_instance.doc) if hasattr(processor_instance, 'doc') else 0,
+            "processed_pages": len(df) if not df.empty else 0,
+            "rev_details": [
+                (
+                    int(page),
+                    texts.tolist() if isinstance(texts, np.ndarray) else texts,
+                    [float(s) for s in (scores.tolist() if isinstance(scores, np.ndarray) else scores)],
+                    polys.tolist() if isinstance(polys, np.ndarray) else polys
+                )
+                for page, texts, scores, polys in rev_details
+            ],
+            "title_details": [
+                (
+                    int(page),
+                    texts.tolist() if isinstance(texts, np.ndarray) else texts,
+                    [float(s) for s in (scores.tolist() if isinstance(scores, np.ndarray) else scores)],
+                    polys.tolist() if isinstance(polys, np.ndarray) else polys
+                )
+                for page, texts, scores, polys in title_details
+            ],
+            "sheet_details": [
+                (
+                    int(page),
+                    texts.tolist() if isinstance(texts, np.ndarray) else texts,
+                    [float(s) for s in (scores.tolist() if isinstance(scores, np.ndarray) else scores)],
+                    polys.tolist() if isinstance(polys, np.ndarray) else polys
+                )
+                for page, texts, scores, polys in sheet_details
+            ],
+            "dnum_details": [
+                (
+                    int(page),
+                    texts.tolist() if isinstance(texts, np.ndarray) else texts,
+                    [float(s) for s in (scores.tolist() if isinstance(scores, np.ndarray) else scores)],
+                    polys.tolist() if isinstance(polys, np.ndarray) else polys
+                )
+                for page, texts, scores, polys in dnum_details
+            ]
+        }
+        data = convert_ndarray_to_list(data)
+
+        processing_time = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Processed PDF successfully in {processing_time:.2f}s")
+        print(f"[INFO] Processed PDF successfully in {processing_time:.2f}s")
+
+        return PDFProcessingResult(
+            success=True,
+            message=f"Successfully processed PDF with {data['total_pages']} pages",
+            data=data,
+            processing_time=processing_time
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing PDF: {str(e)}")
+        print(f"[ERROR] Error processing PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing PDF file: {str(e)}")
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.info("Temporary file cleaned up")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file: {e}")
+
+@app.post("/download-processed-pdf")
+async def download_processed_pdf(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith('.pdf'):
+        logger.error("File must be a PDF file")
+        print("[ERROR] File must be a PDF file")
+        raise HTTPException(status_code=400, detail="File must be a PDF file")
+
+    temp_file_path = None
+    try:
+        contents = await file.read()
+        logger.info(f"Received PDF for download processing: {file.filename}")
+        print(f"[INFO] Received PDF for download processing: {file.filename}")
+
+        if len(contents) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(contents)
+            temp_file_path = temp_file.name
+
+        processor_instance = PDFDrawingProcessor(temp_file_path)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='_indexed.pdf') as output_file:
+            output_path = output_file.name
+
+        result = processor_instance.index_pdf(output_path)
+        
+        if result[0] is None:
+            raise HTTPException(status_code=500, detail="PDF processing failed")
+            
+        buffer = result[0]
+
+        logger.info("PDF processed successfully for download")
+        print("[INFO] PDF processed successfully for download")
+
+        return StreamingResponse(
+            io.BytesIO(buffer.getvalue()),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=processed_{file.filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading processed PDF: {str(e)}")
+        print(f"[ERROR] Error downloading processed PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error downloading processed PDF: {str(e)}")
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file: {e}")

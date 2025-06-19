@@ -9,3 +9,9 @@ pydantic
 pymongo
 python-dotenv
 certifi
+paddlepaddle
+paddleocr
+opencv-python
+setuptools
+reportlab
+PyMuPDF
