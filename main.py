@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
@@ -19,6 +19,7 @@ import certifi
 from PDFDrawingProcessor import PDFDrawingProcessor
 import tempfile
 import os
+import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -652,6 +653,12 @@ def convert_ndarray_to_list(obj):
     else:
         return obj
 
+def buffer_to_base64(buffer):
+    return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+def base64_to_buffer(b64_string):
+    return io.BytesIO(base64.b64decode(b64_string))
+
 @app.post("/process-pdf", response_model=PDFProcessingResult)
 async def process_pdf(file: UploadFile = File(...)):
     start_time = datetime.now()
@@ -733,7 +740,8 @@ async def process_pdf(file: UploadFile = File(...)):
                     polys.tolist() if isinstance(polys, np.ndarray) else polys
                 )
                 for page, texts, scores, polys in dnum_details
-            ]
+            ],
+            "processed_pdf_base64": buffer_to_base64(buffer)
         }
         data = convert_ndarray_to_list(data)
 
@@ -761,57 +769,20 @@ async def process_pdf(file: UploadFile = File(...)):
                 logger.info("Temporary file cleaned up")
             except Exception as e:
                 logger.warning(f"Failed to clean up temporary file: {e}")
+                
+class PDFBase64Request(BaseModel):
+    processed_pdf_base64: str
 
 @app.post("/download-processed-pdf")
-async def download_processed_pdf(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith('.pdf'):
-        logger.error("File must be a PDF file")
-        print("[ERROR] File must be a PDF file")
-        raise HTTPException(status_code=400, detail="File must be a PDF file")
-
-    temp_file_path = None
+async def download_processed_pdf(request: PDFBase64Request):
     try:
-        contents = await file.read()
-        logger.info(f"Received PDF for download processing: {file.filename}")
-        print(f"[INFO] Received PDF for download processing: {file.filename}")
-
-        if len(contents) == 0:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            temp_file.write(contents)
-            temp_file_path = temp_file.name
-
-        processor_instance = PDFDrawingProcessor(temp_file_path)
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix='_indexed.pdf') as output_file:
-            output_path = output_file.name
-
-        result = processor_instance.index_pdf(output_path)
-        
-        if result[0] is None:
-            raise HTTPException(status_code=500, detail="PDF processing failed")
-            
-        buffer = result[0]
-
-        logger.info("PDF processed successfully for download")
-        print("[INFO] PDF processed successfully for download")
-
+        buffer = base64_to_buffer(request.processed_pdf_base64)
         return StreamingResponse(
-            io.BytesIO(buffer.getvalue()),
+            buffer,
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=processed_{file.filename}"}
+            headers={"Content-Disposition": f"attachment; filename=processed.pdf"}
         )
-
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error downloading processed PDF: {str(e)}")
         print(f"[ERROR] Error downloading processed PDF: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error downloading processed PDF: {str(e)}")
-    finally:
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temporary file: {e}")

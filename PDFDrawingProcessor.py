@@ -338,24 +338,27 @@ class PDFDrawingProcessor:
                 logger.error("Cannot create PDF with empty dataframe")
                 print("[ERROR] Cannot create PDF with empty dataframe")
                 return None
-                
+
             original_pdf = fitz.open(self.pdf_path)
-            table_pdf, buffer = self._create_structured_pdf_from_dataframe(df)
-            
-            if table_pdf is None or buffer is None:
+            table_pdf, _ = self._create_structured_pdf_from_dataframe(df)
+
+            if table_pdf is None:
                 logger.error("Failed to create table PDF")
                 print("[ERROR] Failed to create table PDF")
                 return None
-                
+
             original_pdf.insert_pdf(table_pdf, start_at=0)
-            original_pdf.save(output_pdf_path)
+            # Save combined PDF to a BytesIO buffer
+            combined_buffer = io.BytesIO()
+            original_pdf.save(combined_buffer)
             original_pdf.close()
             table_pdf.close()
-            
-            logger.info(f"PDF saved successfully to {output_pdf_path}")
-            print(f"[INFO] PDF saved successfully to {output_pdf_path}")
-            return buffer
-            
+
+            combined_buffer.seek(0)
+            logger.info(f"Combined PDF created in memory")
+            print(f"[INFO] Combined PDF created in memory")
+            return combined_buffer
+
         except Exception as e:
             logger.error(f"Error inserting table to PDF: {e}")
             print(f"[ERROR] Error inserting table to PDF: {e}")
